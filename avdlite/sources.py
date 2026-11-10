@@ -21,7 +21,7 @@ def fetch(url):
         return response.read()
 
 
-def select_image(xml, api='latest', page_size='auto'):
+def available_images(xml, api='latest', page_size='auto'):
     if api != 'latest' and (not re.fullmatch(r'\d+(?:\.\d+)?', api) or int(api.split('.')[0]) < 35):
         raise ValueError('Version must be latest or API 35 and above, such as 35, 36.1, or 37.2')
     tags = {'auto': {'google_apis', 'google_apis_ps16k'}, '4k': {'google_apis'}, '16k': {'google_apis_ps16k'}}
@@ -36,7 +36,8 @@ def select_image(xml, api='latest', page_size='auto'):
         version, tag = match.groups()
         if int(version.split('.')[0]) < 35 or tag not in tags[page_size] or api not in ('latest', version):
             continue
-        if package.find('revision/preview') is not None:
+        channel = package.find('channelRef')
+        if package.find('revision/preview') is not None or (channel is not None and channel.get('ref') != 'channel-0'):
             continue
         archive = package.find('archives/archive/complete')
         if archive is None:
@@ -50,9 +51,15 @@ def select_image(xml, api='latest', page_size='auto'):
                 'checksum_type': checksum.attrib['type'], 'checksum': checksum.text,
                 'url': urllib.parse.urljoin(INDEX, archive.findtext('url'))}
         candidates.append(item)
+    ordered = sorted(candidates, key=lambda p: (tuple(map(int, p['api'].split('.'))), p['page_size'] == '16k', tuple(map(int, p['revision'].split('.')))))
+    return list({image['package']: image for image in ordered}.values())
+
+
+def select_image(xml, api='latest', page_size='auto'):
+    candidates = available_images(xml, api, page_size)
     if not candidates:
         raise ValueError('Official repository has no stable image for the selected version and page size')
-    return max(candidates, key=lambda p: (tuple(map(int, p['api'].split('.'))), p['page_size'] == '16k', tuple(map(int, p['revision'].split('.')))))
+    return candidates[-1]
 
 
 def resolve(api, page_size, enable_ksu):

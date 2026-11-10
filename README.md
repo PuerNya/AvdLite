@@ -36,6 +36,14 @@ Images come from the official stable channel. If the requested image or matching
 
 `Build Version` saves image bundles, SHA-256 files, and verification evidence as Actions artifacts. Both workflows share the same build and verification steps. See [Actions](https://github.com/Kindness-Kismet/AvdLite/actions) for results.
 
+## Daily image archive
+
+**Actions → Daily Images Without KSU** runs daily at 00:00 UTC (08:00 China time), or manually on the default branch. It queries Google's official index on every run for stable Google APIs x86_64 images from API 35 onward and includes every available 4 KB and 16 KB variant.
+
+The `avdlite.ci` script compares each source ZIP's SHA-1 with the last successfully published records in Actions cache. New or changed sources are built without KernelSU and must pass cold boot and reboot verification. Unchanged images are downloaded from the fixed `images` release and checked against their cached SHA-256, source identity, and boot verification report. Missing or invalid reused assets fail the run. A missing cache starts a fresh build.
+
+The release contains every selected ZIP and its `.sha256` file. Daily asset names include the page size, for example `AvdLiteWithoutKsu-Android17-api37.0-4k.zip` and `AvdLiteWithoutKsu-Android17-api37.0-16k.zip`. After all images succeed, publication checks every record against the planned sources and uploads only changed assets, then updates the release description without moving its tag. Reused bundles stay in the release and only their records are passed to publication. The SHA-1 cache is saved only after publication succeeds. The original Build Latest and Build Version workflows remain separate.
+
 ## Download and import
 
 Download the latest images from [Release Assets](https://github.com/Kindness-Kismet/AvdLite/releases). Download custom versions from their Actions run artifacts. `AvdLiteWithKsu` includes KernelSU; `AvdLiteWithoutKsu` is the standard lightweight variant. Each ZIP contains a file checksum list, and GitHub provides a digest for each release asset.
@@ -50,7 +58,7 @@ The importer verifies checksums, installs the system image, and registers an ind
 
 ## Remote sources and caching
 
-Each build queries official Google and KernelSU sources. Cloud runners download the images and dependencies directly from these sources. Google images are verified against the official index checksum, and KernelSU assets use official SHA-256 digests. Cache keys include content digests, and restored files are verified again.
+Image sources are resolved from the official Google index. Builds with KernelSU enabled also query its official releases. Cloud runners download the images and dependencies directly from these sources. Google images are verified against the official index checksum, and KernelSU assets use official SHA-256 digests. The version build's download cache keys include content digests, and restored downloads are verified again.
 
 `.cache/` stores downloads; `.work/` stores local research and temporary files. Git tracks reviewed source files, resources, and documentation through an allowlist. Run the privacy check before pushing.
 
@@ -64,4 +72,4 @@ Hardware components remain installed. The UWB service starts once when its port 
 
 Build checks cover official checksums, GPT and dynamic partition metadata, the AVB public key and signature, ext4 filesystems, the original kernel, and upstream `build.prop` files.
 
-Boot checks use an isolated AVD to verify core applications, SELinux Enforcing, hardware declarations, overlays, and KernelSU initialization. A reboot verifies dark theme schedule persistence. Each run saves logs, a screenshot, and JSON reports.
+Boot checks use an isolated AVD to verify core applications, SELinux Enforcing, hardware declarations, overlays, and, when enabled, KernelSU initialization. A reboot verifies dark theme schedule persistence. Each run saves logs, a screenshot, and JSON reports.
