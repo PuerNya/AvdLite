@@ -30,19 +30,59 @@ class Device:
         while time.monotonic() < deadline:
             if self.process.poll() is not None:
                 raise RuntimeError(f'Emulator exited early with code {self.process.returncode}')
-            if probe():
-                return
+            try:
+                value = probe()
+            except subprocess.TimeoutExpired:
+                value = None
+            if value:
+                return value
             time.sleep(3)
         raise TimeoutError(description)
 
     def ready(self):
         self.wait(lambda: self.shell('getprop', 'sys.boot_completed', check=False) == '1', 'Timed out waiting for Android boot')
         self.wait(lambda: 'package:' in self.shell('pm', 'path', 'com.android.systemui', check=False), 'Timed out waiting for the package manager')
+        self.wait(lambda: self.shell('am', 'get-started-user-state', '0', check=False) == 'RUNNING_UNLOCKED', 'Timed out waiting for user 0 to unlock')
+
+    def reboot(self):
+        before = self.shell('cat', '/proc/sys/kernel/random/boot_id')
+        boot_id = r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}'
+        if not re.fullmatch(boot_id, before):
+            raise ValueError('Invalid boot_id before reboot: ' + before)
+        try:
+            self.shell('svc', 'power', 'reboot', check=False, timeout=60)
+        except subprocess.TimeoutExpired:
+            pass
+
+        def changed_boot_id():
+            value = self.shell('cat', '/proc/sys/kernel/random/boot_id', check=False)
+            return value if re.fullmatch(boot_id, value) and value != before else None
+
+        after = self.wait(changed_boot_id, 'Timed out waiting for a new boot_id')
+        self.ready()
+        return {'before': before, 'after': after}
 
     def capture(self, name, *args):
         text = self.shell(*args, check=False, timeout=60)
         (self.evidence / name).write_text(text)
         return text
+
+
+def verify_reboot(device):
+    expected = {'ui_night_mode': '3', 'dark_theme_custom_start_time': '79200000000', 'dark_theme_custom_end_time': '21600000000'}
+
+    def schedule():
+        return {key: device.shell('settings', '--user', '0', 'get', 'secure', key) for key in expected}
+
+    device.shell('cmd', 'uimode', 'night', 'custom_schedule')
+    for key in ('dark_theme_custom_start_time', 'dark_theme_custom_end_time'):
+        device.shell('settings', '--user', '0', 'put', 'secure', key, expected[key])
+    device.wait(lambda: schedule() == expected, 'Night schedule was not applied before reboot')
+    boot_ids = device.reboot()
+    actual = schedule()
+    if actual != expected:
+        raise AssertionError('Night schedule persistence verification failed: ' + repr(actual))
+    return {'reboot': boot_ids, 'night_schedule_after_reboot': actual}
 
 
 def verify(sdk, work, manifest):
@@ -104,18 +144,7 @@ def verify(sdk, work, manifest):
             else:
                 if 'package:' in device.shell('pm', 'path', 'me.weishu.kernelsu', check=False):
                     raise AssertionError('Standard image unexpectedly contains the KernelSU manager')
-            device.shell('cmd', 'uimode', 'night', 'custom_schedule')
-            for key, value in [('dark_theme_custom_start_time', '79200000000'), ('dark_theme_custom_end_time', '21600000000')]:
-                device.shell('settings', 'put', 'secure', key, value)
-            before = device.shell('cat', '/proc/sys/kernel/random/boot_id')
-            device.call('reboot')
-            device.wait(lambda: (value := device.shell('cat', '/proc/sys/kernel/random/boot_id', check=False)) not in ('', before), 'Timed out waiting for a new boot_id')
-            device.ready()
-            expected = {'ui_night_mode': '3', 'dark_theme_custom_start_time': '79200000000', 'dark_theme_custom_end_time': '21600000000'}
-            actual = {key: device.shell('settings', 'get', 'secure', key) for key in expected}
-            if actual != expected:
-                raise AssertionError('Night schedule persistence verification failed: ' + repr(actual))
-            report['checks']['night_schedule_after_reboot'] = actual
+            report['checks'].update(verify_reboot(device))
             if manifest['ksu']:
                 device.wait(lambda: device.shell('getprop', 'sys.avdlite.ksu_ready', check=False) == '1', 'Timed out waiting for KernelSU initialization after reboot', timeout=120)
                 if 'uid=0' not in device.shell('su', '-c', 'id'):

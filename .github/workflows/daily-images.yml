@@ -48,7 +48,6 @@ jobs:
     timeout-minutes: 60
     strategy:
       fail-fast: false
-      max-parallel: 2
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     env:
       IMAGE_JSON: ${{ toJSON(matrix.image) }}
