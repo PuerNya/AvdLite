@@ -37,6 +37,8 @@ The importer verifies checksums, installs the system image, and registers an ind
 
 Image sources are resolved from the official Google index. Cloud runners download changed source images directly from Google and verify their official SHA-1 checksums before modification. Build tools come from official sources.
 
+All API and page size jobs share an Actions cache for Build Tools 35.0.0, the Android 35 platform, stable Platform Tools and Emulator, and the AVB tool and public test key. Each run resolves the current stable SDK revisions and archive checksums; those identities, the runner OS and architecture, and `resources/tools.json` determine the cache key. One preparation job fills a missing cache. Image jobs restore it only when building, verify installed SDK revisions, and recheck the AVB SHA-256 checksums. AVD userdata, snapshots, temporary signing keys, and verification results are not cached.
+
 `.cache/` stores downloads; `.work/` stores local research and temporary files. Git tracks reviewed source files, resources, and documentation through an allowlist. Run the privacy check before pushing.
 
 ## Debloat rules

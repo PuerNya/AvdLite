@@ -41,8 +41,53 @@ jobs:
         id: plan
         run: python3 -m avdlite.ci plan --cache "$RUNNER_TEMP/image-cache/state.json"
 
-  images:
+  tools:
     needs: plan
+    runs-on: ubuntu-24.04
+    outputs:
+      key: ${{ steps.key.outputs.value }}
+      packages: ${{ steps.resolve.outputs.packages }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Resolve current stable SDK package identities
+        id: resolve
+        run: python3 -m avdlite.tools resolve
+      - name: Identify shared SDK and AVB cache
+        id: key
+        env:
+          CACHE_KEY: tools-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.resolve.outputs.key }}-${{ hashFiles('resources/tools.json') }}
+        run: echo "value=$CACHE_KEY" >> "$GITHUB_OUTPUT"
+      - name: Check shared tools cache without downloading it
+        id: cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ runner.temp }}/android-sdk
+            ${{ runner.temp }}/avdlite/tools
+          key: ${{ steps.key.outputs.value }}
+          lookup-only: true
+      - name: Install shared SDK on cache miss
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p "$RUNNER_TEMP/android-sdk"
+          cp -r "$ANDROID_HOME/licenses" "$RUNNER_TEMP/android-sdk/licenses"
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$RUNNER_TEMP/android-sdk" --channel=0 "build-tools;35.0.0" "platforms;android-35" "platform-tools" "emulator"
+      - name: Verify SDK revisions and AVB checksums before caching
+        if: steps.cache.outputs.cache-hit != 'true'
+        env:
+          SDK_PACKAGES: ${{ steps.resolve.outputs.packages }}
+        run: python3 -m avdlite.tools verify --sdk "$RUNNER_TEMP/android-sdk" --work "$RUNNER_TEMP/avdlite"
+      - name: Save shared SDK and verified AVB tools
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ runner.temp }}/android-sdk
+            ${{ runner.temp }}/avdlite/tools
+          key: ${{ steps.key.outputs.value }}
+
+  images:
+    needs: [plan, tools]
     name: API ${{ matrix.image.api }} (${{ matrix.image.page_size }})
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -62,12 +107,28 @@ jobs:
       - name: Download changed source image
         if: steps.prepare.outputs.reused != 'true'
         run: python3 -m avdlite.sources download --manifest "$RUNNER_TEMP/avdlite/manifest.json" --cache "$RUNNER_TEMP/cache"
-      - name: Install build and emulator tools
+      - name: Restore shared SDK and AVB tools
+        if: steps.prepare.outputs.reused != 'true'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ runner.temp }}/android-sdk
+            ${{ runner.temp }}/avdlite/tools
+          key: ${{ needs.tools.outputs.key }}
+          fail-on-cache-miss: true
+      - name: Verify restored SDK and AVB tools
+        if: steps.prepare.outputs.reused != 'true'
+        env:
+          SDK_PACKAGES: ${{ needs.tools.outputs.packages }}
+        run: |
+          python3 -m avdlite.tools verify --sdk "$RUNNER_TEMP/android-sdk" --work "$RUNNER_TEMP/avdlite"
+          echo "ANDROID_HOME=$RUNNER_TEMP/android-sdk" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$RUNNER_TEMP/android-sdk" >> "$GITHUB_ENV"
+      - name: Install host build and emulator libraries
         if: steps.prepare.outputs.reused != 'true'
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y e2fsprogs gdisk zerofree lz4 cpio unzip libpulse0 libnss3 libxkbcommon0
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "build-tools;35.0.0" "platforms;android-35" "platform-tools" "emulator"
           sudo chmod a+rw /dev/kvm
           df -h "$RUNNER_TEMP"
       - name: Inspect image partitions
